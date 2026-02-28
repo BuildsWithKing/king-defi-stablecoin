@@ -3,7 +3,7 @@ pragma solidity ^0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {DeployKingUSD} from "script/DeployKingUSD.s.sol";
-import {KingUSD} from "src/KingUSD.sol";
+import {KingUSD} from "src/token/KingUSD.sol";
 
 contract DeployKingUSDTest is Test {
     DeployKingUSD public deployer;

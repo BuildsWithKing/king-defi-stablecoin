@@ -3,22 +3,31 @@ pragma solidity ^0.8.30;
 
 /**
  *     @title KingUSD - A decentralized stablecoin.
- *     @author Michealking(@BuildsWithKing)
+ *     @author Michealking (@BuildsWithKing)
  *     @dev This contract accepts wETH and wBTC as collateral, uses an algorithm for its minting & burning and its pegged to USD.
  *     @notice This is an ERC20 token contract governed by KUSDEngine.
  */
+
+/**
+ * @notice Imports KingERC20Burnable with KingERC20, Kingable and KingClaimMistakenETH.
+ *     @dev KingERC20Burnable inherits KingERC20 as its parent contract and allows the contract owner to burn tokens.
+ *     Kingable assigns contract ownership ensuring only the contract owner can call functions guarded with `onlyKing`.
+ *     KingClaimMistakenETH - This is a security safety module that allows users claim back ETH mistakenly sent to this contract,
+ *                             its self-service claim, no admin needed.
+ */
 import {KingERC20Burnable, KingERC20} from "@buildswithking-security/tokens/ERC20/extensions/KingERC20Burnable.sol";
 import {Kingable} from "@buildswithking-security/access/core/Kingable.sol";
+import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingClaimMistakenETH.sol";
 
-contract KingUSD is KingERC20Burnable, Kingable {
+contract KingUSD is KingERC20Burnable, Kingable, KingClaimMistakenETH {
     // =================================== Custom Errors ===============================
     /// @notice Thrown when the engineAddress who is the contract's king tries burning zero token.
     error KingUSD__AmountMustBeGreaterThanZero();
 
-    /// @notice Thrown when the engineAddress tries burning an amount greater than it's balance. 
+    /// @notice Thrown when the engineAddress tries burning an amount greater than it's balance.
     error KingUSD__BalanceTooLow();
 
-    /// @notice Thrown when the engineAddress tries minting tokens to the zero address. 
+    /// @notice Thrown when the engineAddress tries minting tokens to the zero address.
     error KingUSD__ZeroAddress();
 
     // =================================== Constructor ==================================
@@ -29,18 +38,18 @@ contract KingUSD is KingERC20Burnable, Kingable {
     /// @notice Burns token. i.e Removes certain amount of the token from existence. Callable only by the engineAddress.
     /// @param amount The amount of tokens to be burned.
     function burn(uint256 amount) public override onlyKing {
-        // Read the caller's balance. 
+        // Read the caller's balance.
         uint256 balance = balanceOf(msg.sender);
 
         // Revert if amount is less than or equal to zero.
-        if (amount <= 0) {
+        if (amount == 0) {
             revert KingUSD__AmountMustBeGreaterThanZero();
         }
-        // Revert if caller's balance is less than the amount. 
-        if(balance < amount) {
+        // Revert if caller's balance is less than the amount.
+        if (balance < amount) {
             revert KingUSD__BalanceTooLow();
         }
-        // Call kingERC20Burnable burn function. 
+        // Call kingERC20Burnable burn function.
         super.burn(amount);
     }
 
@@ -48,16 +57,17 @@ contract KingUSD is KingERC20Burnable, Kingable {
     /// @param to The receiver's address.
     /// @param amount The amount of tokens to be minted.
     function mint(address to, uint256 amount) external onlyKing returns (bool) {
-        // Revert if the receiver is the zero address. 
-        if(to == address(0)) {
+        // Revert if the receiver is the zero address.
+        if (to == address(0)) {
             revert KingUSD__ZeroAddress();
         }
-        // Revert if the amount is less than or equal to zero. 
-        if(amount <= 0) {
+        // Revert if the amount is less than or equal to zero.
+        if (amount == 0) {
             revert KingUSD__AmountMustBeGreaterThanZero();
         }
+        // Call the internal mint function from KingERC20.
         _mint(to, amount);
 
         return true;
-    } 
+    }
 }
