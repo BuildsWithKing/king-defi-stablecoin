@@ -4,7 +4,7 @@ pragma solidity ^0.8.30;
 /**
  *     @title KingUSD - A decentralized stablecoin.
  *     @author Michealking (@BuildsWithKing)
- *     @dev This contract accepts wETH and wBTC as collateral, uses an algorithm for its minting & burning and its pegged to USD.
+ *     @dev This contract accepts wETH and wBTC as collateral, uses an algorithm for its minting & burning and it is pegged to USD.
  *     @notice This is an ERC20 token contract governed by KUSDEngine.
  */
 

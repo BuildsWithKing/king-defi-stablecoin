@@ -4,7 +4,7 @@ out = "out"
 libs = ["lib"]
 
 remappings = [
-    "@buildswithking-security/=lib/buildswithking-security/contracts/"
+    "@chainlink/contracts=lib/chainlink-brownie-contracts/contracts/","@buildswithking-security/=lib/buildswithking-security/contracts/"
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

@@ -4,3 +4,6 @@
 [submodule "lib/buildswithking-security"]
 	path = lib/buildswithking-security
 	url = https://github.com/BuildsWithKing/buildswithking-security
+[submodule "lib/chainlink-brownie-contracts"]
+	path = lib/chainlink-brownie-contracts
+	url = https://github.com/smartcontractkit/chainlink-brownie-contracts
