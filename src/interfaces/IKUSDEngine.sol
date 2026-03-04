@@ -86,6 +86,7 @@ interface IKUSDEngine {
     /// @notice Liquidates an undercollateralised user's position.
     function liquidate() external;
 
+    // =============================== Public Write Functions ===================================
     /**
      * @notice Deposits Collateral to the contract.
      * @dev Uses `nonReentrant` from KingClaimMistakenETH contract.
