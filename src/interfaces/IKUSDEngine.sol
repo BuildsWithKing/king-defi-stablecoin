@@ -18,8 +18,10 @@ interface IKUSDEngine {
     /// @notice Thrown when a caller inputs zero or less as the amount collateral.
     error KUSDEngine__AmountMustBeGreaterThanZero();
 
-    /// @notice Thrown when a caller tries depositing to a non-existing collateral address.
-    /// @param collateral The collateral's address.
+    /**
+     * @notice Thrown when a caller tries depositing to a non-existing collateral address.
+     * @param collateral The collateral's address.
+     */
     error KUSDEngine__InvalidCollateral(address collateral);
 
     /// @notice Thrown when a caller's mint fails.
@@ -40,9 +42,23 @@ interface IKUSDEngine {
      */
     error KUSDEngine__UnsupportedDecimals(address collateral);
 
-    /// @notice Thrown when a user health factor is less than 1.
-    /// @param userHealthFactor The user's health factor.
+    /**
+     * @notice Thrown when a user health factor is less than 1e18.
+     *     @param userHealthFactor The user's health factor.
+     */
     error KUSDEngine__HealthFactorIsBelowMinimum(uint256 userHealthFactor);
+
+    /**
+     * @notice Thrown when a user health factor is greater than 1e18.
+     * @param userHealthFactor The user's health factor.
+     */
+    error KUSDEngine__HealthFactorAboveMinimum(uint256 userHealthFactor);
+
+    /**
+     * @notice Thrown when a user health factor does not improve during liquidation.
+     * @param userCurrentHealthFactor The user's current health factor.
+     */
+    error KUSDEngine__UserHealthFactorNotImproved(uint256 userCurrentHealthFactor);
 
     // =============================== Events ===================================================
     /**
@@ -55,11 +71,14 @@ interface IKUSDEngine {
 
     /**
      * @notice Emitted once a user redeems collateral.
-     * @param user The user's address.
+     * @param redemmedFrom The user's address.
+     * @param redemmedTo The redemer's address.
      * @param collateral The address of the collateral redeemed.
      * @param amount The amount of collateral redeemed.
      */
-    event CollateralRedeemed(address indexed user, address indexed collateral, uint256 amount);
+    event CollateralRedeemed(
+        address indexed redemmedFrom, address redemmedTo, address indexed collateral, uint256 amount
+    );
 
     // =============================== External Write Functions =================================
     /**
@@ -83,10 +102,21 @@ interface IKUSDEngine {
     function redeemCollateralForKUSD(address collateralAddress, uint256 collateralAmount, uint256 amountOfKUSD)
         external;
 
-    /// @notice Liquidates an undercollateralised user's position.
-    function liquidate() external;
+    /**
+     * @notice Liquidates an undercollateralised user's position.
+     *   Ensures the user's health factor is below the MIN_HEALTH_FACTOR(1e18).
+     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses. 
+     * @notice This function assumes users keep collateral value at about 2x their minted KUSD debt (200% collateralization).
+     *   This function only works if the system is always overcollateralized. 
+     * @notice Known limitation: if the protocol falls to 100% collateralization or below,
+     *   liquidations may no longer be sufficiently incentivized.
+     * @dev Example: a sudden collateral price drop can make positions undercollateralized before liquidators can act.
+     * @param collateralAddress The address of the collateral to liquidate.
+     * @param user The address of the user with health factor < 1e18.
+     * @param debtToCover The amount of KUSD caller wants to burn to improve the user's health factor.
+     */
+    function liquidate(address collateralAddress, address user, uint256 debtToCover) external;
 
-    // =============================== Public Write Functions ===================================
     /**
      * @notice Deposits Collateral to the contract.
      * @dev Uses `nonReentrant` from KingClaimMistakenETH contract.

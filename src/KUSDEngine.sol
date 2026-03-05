@@ -12,7 +12,7 @@ import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingC
 /**
  * @title KUSDEngine - The engine contract controlling KUSD minting and burning.
  * @author Michealking (@BuildsWithKing)
- * @dev This contract accepts wETH and wBTC as collateral, uses an algorithm for its minting & burning and it is pegged to USD.
+ * @dev This contract accepts WETH and WBTC as collateral, uses an algorithm for its minting & burning and it is pegged to USD.
  *
  * @notice This is an KingUSD governing contract.
  * This stablecoin has the properties:
@@ -20,7 +20,7 @@ import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingC
  * - Algorithmically Stable
  * - Exogenous Collateral
  *
- * This is similar to DAI if DAI had no governance, no fees, and was only backed by wETH and wBTC.
+ * This is similar to DAI if DAI had no governance, no fees, and was only backed by WETH and WBTC.
  * KUSD system always remains "overcollateralized". At no point, should the value of all collateral be less than or equal the dollar backed value of KUSD.
  *
  * @notice This contract is VERY loosely based on the MakerDAO DSS (DAI) system.
@@ -62,6 +62,9 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /// @notice The minimum health factor a user must have.
     uint256 private constant MIN_HEALTH_FACTOR = 1e18;
 
+    /// @notice The bonus amount earned by liquidators when a debt owed by the user is cleared.
+    uint256 private constant LIQUIDATION_BONUS = 15;
+
     /// @notice Maps collateral address to price feed addresses.
     mapping(address collateral => address priceFeed) private s_priceFeeds;
 
@@ -76,7 +79,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
 
     /// @notice Records KingUSD token address.
     KingUSD public immutable i_kUSD;
-    
+
     // =============================== Modifiers ================================================
     /**
      * @notice Validates amount and revert if amount is equal to zero.
@@ -122,6 +125,11 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         // Revert if the collateral addresses length is not equal to the length of the pricefeeds address.
         if (collateralAddressesLength != priceFeedAddressesLength) {
             revert KUSDEngine__ArrayLengthMismatch();
+        }
+
+        // Revert if kUSD address is not a contract address.
+        if (kusdAddress.code.length == 0) {
+            revert KUSDEngine__InvalidAddress();
         }
 
         // Loop through collateral addresses and assign pricefeeds address to each collateral address.
@@ -172,7 +180,46 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         redeemCollateral(collateralAddress, collateralAmount);
     }
 
-    function liquidate() external {}
+    /**
+     * @notice Liquidates an undercollateralised user's position.
+     *   Ensures the user's health factor is below the MIN_HEALTH_FACTOR(1e18).
+     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses. 
+     * @notice This function assumes users keep collateral value at about 2x their minted KUSD debt (200% collateralization).
+     *   This function only works if the system is always overcollateralized. 
+     * @notice Known limitation: if the protocol falls to 100% collateralization or below,
+     *   liquidations may no longer be sufficiently incentivized.
+     * @dev Example: a sudden collateral price drop can make positions undercollateralized before liquidators can act.
+     * @param collateralAddress The address of the collateral to liquidate.
+     * @param user The address of the user with health factor < 1e18.
+     * @param debtToCover The amount of KUSD caller wants to burn to improve the user's health factor.
+     */
+    function liquidate(address collateralAddress, address user, uint256 debtToCover)
+        external
+        nonReentrant
+        validateAmount(debtToCover)
+    {
+        // Read the user's current health factor.
+        uint256 userPreviousHealthFactor = _calculateHealthFactor(user);
+        if (userPreviousHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert KUSDEngine__HealthFactorAboveMinimum(userPreviousHealthFactor);
+        }
+        // Read the user's collateral amount from USD.
+        uint256 userCollateralAmount = getCollateralAmountFromUSD(collateralAddress, debtToCover);
+        // Calculate the caller's bonus for liquidating a user and add it to the total collateral to be redeemed.
+        uint256 bonusCollateral = (userCollateralAmount * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
+        uint256 totalCollateralToRedeem = userCollateralAmount + bonusCollateral;
+
+        // Redeem collateral to the caller and burn kusd.
+        _redeemCollateral(user, collateralAddress, totalCollateralToRedeem);
+        _burnKUSD(user, msg.sender, debtToCover);
+
+        // Read user's current health factor and  revert if less than or equal to user's Previous HF. 
+        uint256 userCurrentHealthFactor = _calculateHealthFactor(user);
+        if (userCurrentHealthFactor <= userPreviousHealthFactor) {
+            revert KUSDEngine__UserHealthFactorNotImproved(userCurrentHealthFactor);
+        }
+        _revertIfUserHealthFactorIsBroken(msg.sender);
+    }
 
     // =============================== Public Write Functions =================================
     /**
@@ -224,21 +271,10 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     function redeemCollateral(address collateralAddress, uint256 collateralAmount)
         public
         nonReentrant
+        onlyAllowedCollateral(collateralAddress)
         validateAmount(collateralAmount)
     {
-        uint256 collateralBalance = s_collateralDeposited[msg.sender][collateralAddress];
-        // Revert if amount is greater than the caller's balance.
-        if (collateralAmount > collateralBalance) {
-            revert KUSDEngine__AmountGreaterThanBalance(collateralBalance);
-        }
-        s_collateralDeposited[msg.sender][collateralAddress] = collateralBalance - collateralAmount;
-        emit CollateralRedeemed(msg.sender, collateralAddress, collateralAmount);
-
-        // Safely transfer the collateral amount from this contract to caller.
-        IERC20(collateralAddress).safeTransfer(msg.sender, collateralAmount);
-
-        // Revert if caller's health factor is less than the minimum health factor.
-        _revertIfUserHealthFactorIsBroken(msg.sender);
+        _redeemCollateral(msg.sender, collateralAddress, collateralAmount);
     }
 
     /**
@@ -246,19 +282,56 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param amount The amount of KUSD to be burned.
      */
     function burnKUSD(uint256 amount) public nonReentrant validateAmount(amount) {
-        // Read Caller's KUSD balance.
-        uint256 kUSDBalance = s_kUSDMinted[msg.sender];
+        _burnKUSD(msg.sender, msg.sender, amount);
+    }
 
-        // Revert if amount is greater than the caller's balance.
+    // =============================== Private Write Functions =================================
+    /**
+     * @notice Redeems a user's collateral.
+     * @param user The user's address. 
+     * @param collateralAddress The address of the collateral to redeem.
+     * @param collateralAmount The amount of collateral to redeem.
+     */
+    function _redeemCollateral(address user, address collateralAddress, uint256 collateralAmount)
+        private
+        onlyAllowedCollateral(collateralAddress)
+        validateAmount(collateralAmount)
+    {
+        uint256 collateralBalance = s_collateralDeposited[user][collateralAddress];
+        // Revert if amount is greater than the user's balance.
+        if (collateralAmount > collateralBalance) {
+            revert KUSDEngine__AmountGreaterThanBalance(collateralBalance);
+        }
+        s_collateralDeposited[user][collateralAddress] = collateralBalance - collateralAmount;
+        emit CollateralRedeemed(user, msg.sender, collateralAddress, collateralAmount);
+
+        // Safely transfer the collateral amount from this contract to caller.
+        IERC20(collateralAddress).safeTransfer(msg.sender, collateralAmount);
+
+        // Revert if user's health factor is less than the minimum health factor.
+        _revertIfUserHealthFactorIsBroken(user);
+    }
+
+    /**
+     * @notice Burns KUSD. i.e Removes certain amount of the KUSD from existence.
+     * @param onBehalfOf The debtor's address.
+     * @param from The caller's address.
+     * @param amount The amount of KUSD to be burned.
+     */
+    function _burnKUSD(address onBehalfOf, address from, uint256 amount) private validateAmount(amount) {
+        // Read debtor's KUSD balance.
+        uint256 kUSDBalance = s_kUSDMinted[onBehalfOf];
+
+        // Revert if amount is greater than the debtor's balance.
         if (amount > kUSDBalance) {
             revert KUSDEngine__AmountGreaterThanBalance(kUSDBalance);
         }
 
-        // Deduct amount from caller's KUSD balance.
-        s_kUSDMinted[msg.sender] = kUSDBalance - amount;
+        // Deduct amount from debtor's KUSD balance.
+        s_kUSDMinted[onBehalfOf] = kUSDBalance - amount;
 
         // Safely transfer KUSD from the caller to this contract.
-        IERC20(i_kUSD).safeTransferFrom(msg.sender, address(this), amount);
+        IERC20(i_kUSD).safeTransferFrom(from, address(this), amount);
 
         i_kUSD.burn(amount);
     }
@@ -273,6 +346,37 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     }
 
     // =============================== Public Read Functions ====================================
+    /**
+     * @notice Returns the collateral token amount equivalent to a USD amount.
+     * @param collateralAddress The collateral token address.
+     * @param usdAmountInWei The USD amount scaled to 1e18 (e.g. 1 USD = 1e18).
+     * @return collateralAmount The collateral amount in the token's base units.
+     */
+    function getCollateralAmountFromUSD(address collateralAddress, uint256 usdAmountInWei)
+        public
+        view
+        onlyAllowedCollateral(collateralAddress)
+        returns (uint256 collateralAmount)
+    {
+        AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
+        (, int256 price,,,) = priceFeed.latestRoundData();
+
+        // Call the internal _revertIfPriceIsLessThanOrEqualZero function.
+        _revertIfPriceIsLessThanOrEqualZero(collateralAddress, price);
+
+        // Read the price feed's decimals.
+        uint8 feedDecimals = priceFeed.decimals();
+
+        // Call the internal _checkPriceFeedsAndCollateralDecimals function.
+        (uint256 normalizedPrice, uint8 collateralDecimals) =
+            _checkPriceFeedsAndCollateralDecimals(price, feedDecimals, collateralAddress);
+
+        // Token scale factor: one whole token in base units (e.g. for 18 decimals, 1 token = 1e18 = 10**18).
+        uint256 collateralUnit = DECIMAL_BASE ** collateralDecimals;
+
+        return (usdAmountInWei * collateralUnit) / normalizedPrice;
+    }
+
     /**
      * @notice Returns the user's collateral value.
      * @param user The user's address.
@@ -298,31 +402,29 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param amount The amount of token
      * @return The USD value of the amount of token
      */
-    function getCollateralUSDValue(address collateralAddress, uint256 amount) public view returns (uint256) {
+    function getCollateralUSDValue(address collateralAddress, uint256 amount)
+        public
+        view
+        onlyAllowedCollateral(collateralAddress)
+        returns (uint256)
+    {
         // Read the collateral's token price using its address from chainlink.
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
         (, int256 price,,,) = priceFeed.latestRoundData();
-        if (price <= 0) {
-            revert KUSDEngine__InvalidOraclePrice(collateralAddress);
-        }
 
+        // Call the internal _revertIfPriceIsLessThanOrEqualZero function.
+        _revertIfPriceIsLessThanOrEqualZero(collateralAddress, price);
+
+        // Read the price feed's decimals.
         uint8 feedDecimals = priceFeed.decimals();
-        uint8 collateralDecimals = IERC20Metadata(collateralAddress).decimals();
 
-        // Revert if the feedDecimals or the collateralDecimals is greater than 77 (max uint256 is about 1.1579e77)
-        if (feedDecimals > MAX_SAFE_DECIMALS || collateralDecimals > MAX_SAFE_DECIMALS) {
-            revert KUSDEngine__UnsupportedDecimals(collateralAddress);
-        }
-        // Convert price from int256 to uint256.
-        uint256 normalizedPrice = uint256(price);
-        if (feedDecimals < USD_PRECISION_DECIMALS) {
-            // Scale feed price up to 18 decimals so all USD math uses one precision.
-            normalizedPrice *= DECIMAL_BASE ** (USD_PRECISION_DECIMALS - feedDecimals);
-        } else if (feedDecimals > USD_PRECISION_DECIMALS) {
-            revert KUSDEngine__UnsupportedDecimals(collateralAddress);
-        }
-        // Convert token base units (amount) into whole-token units using token decimals.
+        // Call the internal _checkPriceFeedsAndCollateralDecimals function.
+        (uint256 normalizedPrice, uint8 collateralDecimals) =
+            _checkPriceFeedsAndCollateralDecimals(price, feedDecimals, collateralAddress);
+
+        // Token scale factor: one whole token in base units (e.g. for 18 decimals, 1 token = 1e18 = 10**18).
         uint256 collateralUnit = DECIMAL_BASE ** collateralDecimals;
+
         return (normalizedPrice * amount) / collateralUnit;
     }
 
@@ -366,6 +468,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         return (liquidationAdjustedCollateralUsd * PRECISION) / totalKUSDMinted;
     }
 
+    // ======================================== Internal View Function =========================
     /**
      * @notice Checks user's health factor and revert if user don't have enough collateral.
      * @param user The user's address.
@@ -378,5 +481,47 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
             revert KUSDEngine__HealthFactorIsBelowMinimum(userHealthFactor);
         }
+    }
+
+    /**
+     * @notice Checks collateral's price and revert if price is less than or equal to zero.
+     * @param collateralAddress The token collateral address.
+     * @param price The collateral's current price.
+     */
+    function _revertIfPriceIsLessThanOrEqualZero(address collateralAddress, int256 price) internal pure {
+        // Revert if price is less than or equal to zero.
+        if (price <= 0) {
+            revert KUSDEngine__InvalidOraclePrice(collateralAddress);
+        }
+    }
+
+    /**
+     * @notice Checks the priceFeeds and collateral address's decimals.
+     * @param price The price of the feeds.
+     * @param feedDecimals The decimals of the feed.
+     * @param collateralAddress The token collateral address.
+     */
+    function _checkPriceFeedsAndCollateralDecimals(int256 price, uint8 feedDecimals, address collateralAddress)
+        internal
+        view
+        returns (uint256 normalizedPrice, uint8 collateralDecimals)
+    {
+        // Read the collateral's decimals.
+        collateralDecimals = IERC20Metadata(collateralAddress).decimals();
+
+        // Revert if the feedDecimals or the collateralDecimals is greater than 77 (max uint256 is about 1.1579e77)
+        if (feedDecimals > MAX_SAFE_DECIMALS || collateralDecimals > MAX_SAFE_DECIMALS) {
+            revert KUSDEngine__UnsupportedDecimals(collateralAddress);
+        }
+        // Convert price from int256 to uint256.
+        normalizedPrice = uint256(price);
+        if (feedDecimals < USD_PRECISION_DECIMALS) {
+            // Scale feed price up to 18 decimals so all USD math uses one precision (1e18).
+            normalizedPrice *= DECIMAL_BASE ** (USD_PRECISION_DECIMALS - feedDecimals);
+        } else if (feedDecimals > USD_PRECISION_DECIMALS) {
+            revert KUSDEngine__UnsupportedDecimals(collateralAddress);
+        }
+
+        return (normalizedPrice, collateralDecimals);
     }
 }
