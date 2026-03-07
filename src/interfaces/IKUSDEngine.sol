@@ -15,6 +15,9 @@ interface IKUSDEngine {
     /// @notice Thrown when the zero address or kusd token address is used as the collateral address.
     error KUSDEngine__InvalidAddress();
 
+    /// @notice Thrown for an existing collateral address.
+    error KUSDEngine__SameCollateralAddress(address collateralAddress);
+
     /// @notice Thrown when a caller inputs zero or less as the amount collateral.
     error KUSDEngine__AmountMustBeGreaterThanZero();
 
@@ -44,21 +47,22 @@ interface IKUSDEngine {
 
     /**
      * @notice Thrown when a user health factor is less than 1e18.
-     *     @param userHealthFactor The user's health factor.
+     * @param user The user's address.
+     * @param userHealthFactor The user's health factor.
      */
-    error KUSDEngine__HealthFactorIsBelowMinimum(uint256 userHealthFactor);
+    error KUSDEngine__HealthFactorIsBelowMinimum(address user, uint256 userHealthFactor);
 
     /**
      * @notice Thrown when a user health factor is greater than 1e18.
+     * @param user The user's address.
      * @param userHealthFactor The user's health factor.
      */
-    error KUSDEngine__HealthFactorAboveMinimum(uint256 userHealthFactor);
+    error KUSDEngine__HealthFactorAboveMinimum(address user, uint256 userHealthFactor);
 
     /**
      * @notice Thrown when a user health factor does not improve during liquidation.
-     * @param userCurrentHealthFactor The user's current health factor.
      */
-    error KUSDEngine__UserHealthFactorNotImproved(uint256 userCurrentHealthFactor);
+    error KUSDEngine__UserHealthFactorNotImproved();
 
     // =============================== Events ===================================================
     /**
@@ -99,15 +103,14 @@ interface IKUSDEngine {
      * @param collateralAmount The amount of collateral to redeem.
      * @param amountOfKUSD The amount of KUSD to burn.
      */
-    function redeemCollateralForKUSD(address collateralAddress, uint256 collateralAmount, uint256 amountOfKUSD)
-        external;
+    function redeemCollateralForKUSD(address collateralAddress, uint256 collateralAmount, uint256 amountOfKUSD) external;
 
     /**
      * @notice Liquidates an undercollateralised user's position.
      *   Ensures the user's health factor is below the MIN_HEALTH_FACTOR(1e18).
-     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses. 
+     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses.
      * @notice This function assumes users keep collateral value at about 2x their minted KUSD debt (200% collateralization).
-     *   This function only works if the system is always overcollateralized. 
+     *   This function only works if the system is always overcollateralized.
      * @notice Known limitation: if the protocol falls to 100% collateralization or below,
      *   liquidations may no longer be sufficiently incentivized.
      * @dev Example: a sudden collateral price drop can make positions undercollateralized before liquidators can act.

@@ -14,7 +14,7 @@ import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingC
  * @author Michealking (@BuildsWithKing)
  * @dev This contract accepts WETH and WBTC as collateral, uses an algorithm for its minting & burning and it is pegged to USD.
  *
- * @notice This is an KingUSD governing contract.
+ * @notice This is the KingUSD governing contract.
  * This stablecoin has the properties:
  * - Dollar Pegged
  * - Algorithmically Stable
@@ -122,6 +122,8 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         uint256 collateralAddressesLength = collateralAddresses.length;
         uint256 priceFeedAddressesLength = priceFeedAddresses.length;
 
+        uint256 collateralTokensLength = s_collateralTokens.length;
+
         // Revert if the collateral addresses length is not equal to the length of the pricefeeds address.
         if (collateralAddressesLength != priceFeedAddressesLength) {
             revert KUSDEngine__ArrayLengthMismatch();
@@ -134,19 +136,30 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
 
         // Loop through collateral addresses and assign pricefeeds address to each collateral address.
         for (uint256 i = 0; i < collateralAddressesLength;) {
+            address collateral = collateralAddresses[i];
+            address priceFeed = priceFeedAddresses[i];
+
             if (
-                collateralAddresses[i] == address(0) || collateralAddresses[i] == kusdAddress
-                    || collateralAddresses[i].code.length == 0 || priceFeedAddresses[i] == address(0)
-                    || priceFeedAddresses[i].code.length == 0 || priceFeedAddresses[i] == kusdAddress
+                collateral == address(0) || collateral == kusdAddress
+                    || collateral.code.length == 0 || priceFeed == address(0)
+                    || priceFeed.code.length == 0 || priceFeed == kusdAddress
             ) {
                 revert KUSDEngine__InvalidAddress();
             }
-            s_priceFeeds[collateralAddresses[i]] = priceFeedAddresses[i];
-            s_collateralTokens.push(collateralAddresses[i]);
-            unchecked {
-                ++i;
+
+            // Detect deplicate collateral addresses in constructor input. 
+            for (uint256 j = i + 1; j < collateralAddressesLength;) {
+                if (collateral == collateralAddresses[j]) {
+                    revert KUSDEngine__SameCollateralAddress(collateral);
+                }
+                unchecked { ++j; }
             }
+            s_priceFeeds[collateral] = priceFeed;
+            s_collateralTokens.push(collateral);
+
+            unchecked {++i; }
         }
+
         i_kUSD = KingUSD(kusdAddress);
     }
     // =============================== External Write Functions =================================
@@ -183,12 +196,14 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /**
      * @notice Liquidates an undercollateralised user's position.
      *   Ensures the user's health factor is below the MIN_HEALTH_FACTOR(1e18).
-     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses. 
+     *   Caller Pays debt owed by the user to improve the user's health factor and earn bonuses.
      * @notice This function assumes users keep collateral value at about 2x their minted KUSD debt (200% collateralization).
-     *   This function only works if the system is always overcollateralized. 
+     *   This function only works if the system is always overcollateralized.
      * @notice Known limitation: if the protocol falls to 100% collateralization or below,
      *   liquidations may no longer be sufficiently incentivized.
      * @dev Example: a sudden collateral price drop can make positions undercollateralized before liquidators can act.
+     * Note: Users CAN liquidate themselves if underwater, but this is gas-inefficient.
+     *         Use redeemCollateralForKUSD() instead for normal exists.
      * @param collateralAddress The address of the collateral to liquidate.
      * @param user The address of the user with health factor < 1e18.
      * @param debtToCover The amount of KUSD caller wants to burn to improve the user's health factor.
@@ -199,9 +214,9 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         validateAmount(debtToCover)
     {
         // Read the user's current health factor.
-        uint256 userPreviousHealthFactor = _calculateHealthFactor(user);
-        if (userPreviousHealthFactor >= MIN_HEALTH_FACTOR) {
-            revert KUSDEngine__HealthFactorAboveMinimum(userPreviousHealthFactor);
+        uint256 userInitialHealthFactor = _calculateHealthFactor(user);
+        if (userInitialHealthFactor >= MIN_HEALTH_FACTOR) {
+            revert KUSDEngine__HealthFactorAboveMinimum(user, userInitialHealthFactor);
         }
         // Read the user's collateral amount from USD.
         uint256 userCollateralAmount = getCollateralAmountFromUSD(collateralAddress, debtToCover);
@@ -213,12 +228,12 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         _redeemCollateral(user, collateralAddress, totalCollateralToRedeem);
         _burnKUSD(user, msg.sender, debtToCover);
 
-        // Read user's current health factor and  revert if less than or equal to user's Previous HF. 
+        // Read user's current health factor and  revert if less than or equal to user's Previous HF.
         uint256 userCurrentHealthFactor = _calculateHealthFactor(user);
-        if (userCurrentHealthFactor <= userPreviousHealthFactor) {
-            revert KUSDEngine__UserHealthFactorNotImproved(userCurrentHealthFactor);
+        if (userCurrentHealthFactor <= userInitialHealthFactor) {
+            revert KUSDEngine__UserHealthFactorNotImproved();
         }
-        _revertIfUserHealthFactorIsBroken(msg.sender);
+        _revertIfUserHealthFactorIsBelowMinimum(msg.sender);
     }
 
     // =============================== Public Write Functions =================================
@@ -254,7 +269,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         s_kUSDMinted[msg.sender] += amount;
 
         // Call the internal function and check the caller's health factor.
-        _revertIfUserHealthFactorIsBroken(msg.sender);
+        _revertIfUserHealthFactorIsBelowMinimum(msg.sender);
 
         // Mint KUSD to the caller.
         bool success = i_kUSD.mint(msg.sender, amount);
@@ -275,6 +290,9 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         validateAmount(collateralAmount)
     {
         _redeemCollateral(msg.sender, collateralAddress, collateralAmount);
+
+        // Revert if caller's health factor is less than the minimum health factor.
+        _revertIfUserHealthFactorIsBelowMinimum(msg.sender);
     }
 
     /**
@@ -288,7 +306,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     // =============================== Private Write Functions =================================
     /**
      * @notice Redeems a user's collateral.
-     * @param user The user's address. 
+     * @param user The user's address.
      * @param collateralAddress The address of the collateral to redeem.
      * @param collateralAmount The amount of collateral to redeem.
      */
@@ -307,9 +325,6 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
 
         // Safely transfer the collateral amount from this contract to caller.
         IERC20(collateralAddress).safeTransfer(msg.sender, collateralAmount);
-
-        // Revert if user's health factor is less than the minimum health factor.
-        _revertIfUserHealthFactorIsBroken(user);
     }
 
     /**
@@ -340,9 +355,18 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /**
      * @notice Returns the user's health factor.
      * @param user The user's address.
+     * @return healthFactor The user's health factor.
      */
     function getHealthFactor(address user) external view returns (uint256 healthFactor) {
         return _calculateHealthFactor(user);
+    }
+
+    /**
+     * @notice Returns the minimum health factor.
+     * @return The minimum health factor.
+     */
+    function getMinimumHealthFactor() external pure returns (uint256) {
+        return MIN_HEALTH_FACTOR;
     }
 
     // =============================== Public Read Functions ====================================
@@ -383,7 +407,8 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @return totalCollateralValueInUSD The user's total collateral value in USD.
      */
     function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUSD) {
-        for (uint256 i = 0; i < s_collateralTokens.length;) {
+        uint256 collateralTokensLength = s_collateralTokens.length;
+        for (uint256 i = 0; i < collateralTokensLength;) {
             address collateralAddress = s_collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][collateralAddress];
             totalCollateralValueInUSD += getCollateralUSDValue(collateralAddress, amount);
@@ -428,6 +453,29 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         return (normalizedPrice * amount) / collateralUnit;
     }
 
+    /**
+     * @notice Returns the user's account information.
+     * @param user The user's address.
+     * @return totalKUSDMinted The total KUSD minted by the user.
+     * collateralValueInUSD The user's collateral's value in dollar.
+     */
+    function getAccountInformation(address user)
+        public
+        view
+        returns (uint256 totalKUSDMinted, uint256 collateralValueInUSD)
+    {
+        (totalKUSDMinted, collateralValueInUSD) = _getAccountInformation(user);
+    }
+
+    /**
+     * @notice Returns the amount of token minted by the user.
+     * @param user The user's address.
+     * @return balance The amount of KUSD minted by the user.
+     */
+    function getKUSDBalanceOf(address user) public view returns (uint256 balance) {
+        balance = s_kUSDMinted[user];
+    }
+
     // =============================== Private Read Functions ===================================
     /**
      * @notice Returns the user's account information.
@@ -449,7 +497,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /**
      * @notice Returns the user's health factor.
      * @dev Health factor < 1e18 means liquidatable.
-     * Formula: HF = (collateralUsd * 50 / 100) * 1e18 / totalKUSDMinted
+     * Formula: HF = (collateralValueInUSD * 50 / 100) * 1e18 / totalKUSDMinted
      * @param user The user's address.
      * @return healthFactor The user's health factor, scaled by 1e18.
      */
@@ -468,18 +516,18 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         return (liquidationAdjustedCollateralUsd * PRECISION) / totalKUSDMinted;
     }
 
-    // ======================================== Internal View Function =========================
+    // ======================================== Internal View Functions =========================
     /**
      * @notice Checks user's health factor and revert if user don't have enough collateral.
      * @param user The user's address.
      */
-    function _revertIfUserHealthFactorIsBroken(address user) internal view {
+    function _revertIfUserHealthFactorIsBelowMinimum(address user) internal view {
         // Read user's health factor.
         uint256 userHealthFactor = _calculateHealthFactor(user);
 
-        // Revert if the user's health factor is less than 1.
+        // Revert if the user's health factor is less than 1e18.
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
-            revert KUSDEngine__HealthFactorIsBelowMinimum(userHealthFactor);
+            revert KUSDEngine__HealthFactorIsBelowMinimum(user, userHealthFactor);
         }
     }
 
