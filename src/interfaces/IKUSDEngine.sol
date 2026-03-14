@@ -15,9 +15,6 @@ interface IKUSDEngine {
     /// @notice Thrown when the zero address or kusd token address is used as the collateral address.
     error KUSDEngine__InvalidAddress();
 
-    /// @notice Thrown for an existing collateral address.
-    error KUSDEngine__SameCollateralAddress(address collateralAddress);
-
     /// @notice Thrown when a caller inputs zero or less as the amount collateral.
     error KUSDEngine__AmountMustBeGreaterThanZero();
 
@@ -89,21 +86,21 @@ interface IKUSDEngine {
      * @notice Deposits collateral to the contract and mints KUSD to the caller.
      * @param collateralAddress The address of the token to deposit as collateral.
      * @param collateralAmount The amount of collateral to deposit.
-     * @param amountOfKUSDToMint The amount of KUSD to mint to the caller.
+     * @param amountOfKusdToMint The amount of KUSD to mint to the caller.
      */
-    function depositCollateralAndMintKUSD(
+    function depositCollateralAndMintKusd(
         address collateralAddress,
         uint256 collateralAmount,
-        uint256 amountOfKUSDToMint
+        uint256 amountOfKusdToMint
     ) external;
 
     /**
      * @notice Burns KUSD and redeems caller's collateral.
      * @param collateralAddress The address of the collateral to redeem.
      * @param collateralAmount The amount of collateral to redeem.
-     * @param amountOfKUSD The amount of KUSD to burn.
+     * @param amountOfKusd The amount of KUSD to burn.
      */
-    function redeemCollateralForKUSD(address collateralAddress, uint256 collateralAmount, uint256 amountOfKUSD) external;
+    function redeemCollateralForKusd(address collateralAddress, uint256 collateralAmount, uint256 amountOfKusd) external;
 
     /**
      * @notice Liquidates an undercollateralised user's position.
@@ -133,7 +130,7 @@ interface IKUSDEngine {
      * check caller's health factor and ensure its greater than or equal to 1.
      * @param amount The amount of KUSD to mint.
      */
-    function mintKUSD(uint256 amount) external;
+    function mintKusd(uint256 amount) external;
 
     /**
      * @notice Redeems caller's collateral.
@@ -146,7 +143,7 @@ interface IKUSDEngine {
      * @notice Burns KUSD. i.e Removes certain amount of the KUSD from existence.
      * @param amount The amount of KUSD to be burned.
      */
-    function burnKUSD(uint256 amount) external;
+    function burnKusd(uint256 amount) external;
 
     // =============================== External Read Functions ==================================
     /**
@@ -159,9 +156,9 @@ interface IKUSDEngine {
     /**
      * @notice Returns the user's collateral value.
      * @param user The user's address.
-     * @return totalCollateralValueInUSD The user's total collateral value in USD.
+     * @return totalCollateralValueInUsd The user's total collateral value in USD.
      */
-    function getAccountCollateralValue(address user) external view returns (uint256 totalCollateralValueInUSD);
+    function getAccountCollateralValue(address user) external view returns (uint256 totalCollateralValueInUsd);
 
     /**
      * @notice Returns USD value scaled to 1e18 precision.
@@ -171,5 +168,5 @@ interface IKUSDEngine {
      * @param amount The amount of token.
      * @return The USD value of the amount of token.
      */
-    function getCollateralUSDValue(address collateralAddress, uint256 amount) external view returns (uint256);
+    function getCollateralUsdValue(address collateralAddress, uint256 amount) external view returns (uint256);
 }

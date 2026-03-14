@@ -7,10 +7,10 @@ import {MockERC20} from "test/mocks/MockERC20.sol";
 
 contract HelperConfig is Script {
     struct NetworkConfig {
-        address wETH;
-        address wBTC;
-        address wETHUSDPriceFeed;
-        address wBTCUSDPriceFeed;
+        address wEth;
+        address wBtc;
+        address wEthUsdPriceFeed;
+        address wBtcUsdPriceFeed;
     }
 
     NetworkConfig public activeNetworkConfig;
@@ -24,38 +24,38 @@ contract HelperConfig is Script {
 
     constructor() {
         if (block.chainid == SEPOLIA_CHAIN_ID) {
-            activeNetworkConfig = getSepoliaETHConfig();
+            activeNetworkConfig = getSepoliaEthConfig();
         } else {
-            activeNetworkConfig = getOrCreateAnvilETHConfig();
+            activeNetworkConfig = getOrCreateAnvilEthConfig();
         }
     }
 
-    function getSepoliaETHConfig() public pure returns (NetworkConfig memory sepoliaETHConfig) {
-        return sepoliaETHConfig = NetworkConfig({
-            wETH: 0xdd13E55209Fd76AfE204dBda4007C227904f0a81,
-            wBTC: 0x8f3Cf7ad23Cd3CaDbD9735AFf958023239c6A063,
-            wETHUSDPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
-            wBTCUSDPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43
+    function getSepoliaEthConfig() public pure returns (NetworkConfig memory sepoliaEthConfig) {
+        return sepoliaEthConfig = NetworkConfig({
+            wEth: 0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14,
+            wBtc: 0xdE43B354d506Ce213C4bE70B750b5c6AcC09D7CA,
+            wEthUsdPriceFeed: 0x694AA1769357215DE4FAC081bf1f309aDC325306,
+            wBtcUsdPriceFeed: 0x1b44F3514812d835EB1BDB0acB33d3fA3351Ee43
         });
     }
 
-    function getOrCreateAnvilETHConfig() public returns (NetworkConfig memory anvilETHConfig) {
-        if (activeNetworkConfig.wETHUSDPriceFeed != address(0)) {
+    function getOrCreateAnvilEthConfig() public returns (NetworkConfig memory anvilEthConfig) {
+        if (activeNetworkConfig.wEthUsdPriceFeed != address(0)) {
             return activeNetworkConfig;
         }
         vm.startBroadcast();
-        MockV3Aggregator wETHUSDpriceFeedMock = new MockV3Aggregator(DECIMALS, ETH_USD_PRICE);
-        MockV3Aggregator wBTCUSDPriceFeedMock = new MockV3Aggregator(DECIMALS, BTC_USD_PRICE);
-        MockERC20 wETHMock = new MockERC20("Wrapped ETH", "WETH", INITIAL_SUPPLY);
-        MockERC20 wBTCMock = new MockERC20("Wrapped BTC", "WBTC", INITIAL_SUPPLY);
+        MockV3Aggregator wEthUsdpriceFeedMock = new MockV3Aggregator(DECIMALS, ETH_USD_PRICE);
+        MockV3Aggregator wBtcUsdPriceFeedMock = new MockV3Aggregator(DECIMALS, BTC_USD_PRICE);
+        MockERC20 wEthMock = new MockERC20("Wrapped ETH", "WETH", INITIAL_SUPPLY);
+        MockERC20 wBtcMock = new MockERC20("Wrapped BTC", "WBTC", INITIAL_SUPPLY);
 
         vm.stopBroadcast();
 
-        return anvilETHConfig = NetworkConfig({
-            wETH: address(wETHMock),
-            wBTC: address(wBTCMock),
-            wETHUSDPriceFeed: address(wETHUSDpriceFeedMock),
-            wBTCUSDPriceFeed: address(wBTCUSDPriceFeedMock)
+        return anvilEthConfig = NetworkConfig({
+            wEth: address(wEthMock),
+            wBtc: address(wBtcMock),
+            wEthUsdPriceFeed: address(wEthUsdpriceFeedMock),
+            wBtcUsdPriceFeed: address(wBtcUsdPriceFeedMock)
         });
     }
 }

@@ -8,8 +8,8 @@ import {KingUSD} from "src/token/KingUSD.sol";
 contract DeployKingUSD is Script {
     function run() external returns (KingUSD) {
         vm.startBroadcast();
-        KingUSD kingUSD = new KingUSD(msg.sender);
+        KingUSD kingUsd = new KingUSD(msg.sender);
         vm.stopBroadcast();
-        return kingUSD;
+        return kingUsd;
     }
 }

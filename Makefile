@@ -12,7 +12,7 @@ test -vvv :; forge test -vvv
 
 coverage :; forge coverage
 
-install :; forge install cyfrin/foundry-devops@0.2.2 && forge install smartcontractkit/chainlink-brownie-contracts@1.1.1 && forge install foundry-rs/forge-std@v1.8.2 && forge install transmissions11/solmate@v6
+install :; forge install BuildsWithKing/buildswithking-security && forge install smartcontractkit/chainlink-brownie-contracts@1.1.1 && forge install foundry-rs/forge-std@v1.8.2
 
 deploy-sepolia: 
 	@forge script script/DeployKUSDEngine.s.sol:DeployKUSDEngine --rpc-url $(SEPOLIA_RPC_URL) --account myaccount --broadcast --verify --etherscan-api-key $(ETHERSCAN_API_KEY) -vvvv

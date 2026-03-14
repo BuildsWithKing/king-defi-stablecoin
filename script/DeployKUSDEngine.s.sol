@@ -13,17 +13,17 @@ contract DeployKUSDEngine is Script {
     function run() external returns (KingUSD, KUSDEngine, HelperConfig) {
         HelperConfig config = new HelperConfig();
 
-        (address wETH, address wBTC, address wETHUSDPriceFeed, address wBTCUSDPriceFeed) = config.activeNetworkConfig();
+        (address wEth, address wBtc, address wEthUsdPriceFeed, address wBtcUsdPriceFeed) = config.activeNetworkConfig();
 
-        collateralAddresses = [wETH, wBTC];
-        priceFeedAddresses = [wETHUSDPriceFeed, wBTCUSDPriceFeed];
+        collateralAddresses = [wEth, wBtc];
+        priceFeedAddresses = [wEthUsdPriceFeed, wBtcUsdPriceFeed];
 
-        vm.startBroadcast(msg.sender);
-        KingUSD kingUSD = new KingUSD(msg.sender);
-        KUSDEngine kUSDEngine = new KUSDEngine(collateralAddresses, priceFeedAddresses, payable(address(kingUSD)));
-        kingUSD.transferKingshipTo(address(kUSDEngine));
+        vm.startBroadcast(0x63c013128BF5C7628Fc8B87b68Aa90442AF312aa);
+        KingUSD kingUsd = new KingUSD(0x63c013128BF5C7628Fc8B87b68Aa90442AF312aa);
+        KUSDEngine kUsdEngine = new KUSDEngine(collateralAddresses, priceFeedAddresses, payable(address(kingUsd)));
+        kingUsd.transferKingshipTo(address(kUsdEngine));
         vm.stopBroadcast();
 
-        return (kingUSD, kUSDEngine, config);
+        return (kingUsd, kUsdEngine, config);
     }
 }

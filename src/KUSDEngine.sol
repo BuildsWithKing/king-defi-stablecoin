@@ -6,7 +6,7 @@ import {KingUSD} from "src/token/KingUSD.sol";
 import {IERC20} from "@buildswithking-security/tokens/ERC20/interfaces/IERC20.sol";
 import {IERC20Metadata} from "@buildswithking-security/tokens/ERC20/interfaces/IERC20Metadata.sol";
 import {KingSafeERC20} from "src/Utils/KingSafeERC20.sol";
-import {AggregatorV3Interface} from "@chainlink/contracts/src/v0.8/interfaces/AggregatorV3Interface.sol";
+import {OracleLib, AggregatorV3Interface} from "src/libraries/OracleLib.sol";
 import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingClaimMistakenETH.sol";
 
 /**
@@ -26,7 +26,9 @@ import {KingClaimMistakenETH} from "@buildswithking-security/access/guards/KingC
  * @notice This contract is VERY loosely based on the MakerDAO DSS (DAI) system.
  */
 contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
+    // ============================== Types =====================================================
     using KingSafeERC20 for IERC20;
+    using OracleLib for AggregatorV3Interface;
 
     // =============================== State Variables ==========================================
     /**
@@ -72,13 +74,13 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     mapping(address user => mapping(address collateral => uint256 amount)) private s_collateralDeposited;
 
     /// @notice Maps users address to amount of kUSD minted.
-    mapping(address user => uint256 kUSD) private s_kUSDMinted;
+    mapping(address user => uint256 kUSD) private s_kusdMinted;
 
     /// @notice Records collateral tokens addresses.
     address[] private s_collateralTokens;
 
     /// @notice Records KingUSD token address.
-    KingUSD public immutable i_kUSD;
+    KingUSD private immutable I_K_USD;
 
     // =============================== Modifiers ================================================
     /**
@@ -87,10 +89,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param amount The amount to be validated.
      */
     modifier validateAmount(uint256 amount) {
-        // Revert if amount is equal to zero.
-        if (amount == 0) {
-            revert KUSDEngine__AmountMustBeGreaterThanZero();
-        }
+        _validateAmount(amount);
         _;
     }
 
@@ -100,10 +99,31 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param collateralAddress The address to be validated.
      */
     modifier onlyAllowedCollateral(address collateralAddress) {
+        _onlyAllowedCollateral(collateralAddress);
+        _;
+    }
+
+    /**
+     * @notice Internal function to validate amount
+     * @dev Reverts if amount is equal to zero
+     * @param amount The amount to validate
+     */
+    function _validateAmount(uint256 amount) internal pure {
+        // Revert if amount is equal to zero.
+        if (amount == 0) {
+            revert KUSDEngine__AmountMustBeGreaterThanZero();
+        }
+    }
+
+    /**
+     * @notice Internal function to validate collateral address
+     * @dev Reverts if the collateral address doesn't have a price feed
+     * @param collateralAddress The collateral address to validate
+     */
+    function _onlyAllowedCollateral(address collateralAddress) internal view {
         if (s_priceFeeds[collateralAddress] == address(0)) {
             revert KUSDEngine__InvalidCollateral(collateralAddress);
         }
-        _;
     }
 
     // =============================== Constructor ==============================================
@@ -122,8 +142,6 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         uint256 collateralAddressesLength = collateralAddresses.length;
         uint256 priceFeedAddressesLength = priceFeedAddresses.length;
 
-        uint256 collateralTokensLength = s_collateralTokens.length;
-
         // Revert if the collateral addresses length is not equal to the length of the pricefeeds address.
         if (collateralAddressesLength != priceFeedAddressesLength) {
             revert KUSDEngine__ArrayLengthMismatch();
@@ -139,57 +157,44 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
             address collateral = collateralAddresses[i];
             address priceFeed = priceFeedAddresses[i];
 
-            if (
-                collateral == address(0) || collateral == kusdAddress
-                    || collateral.code.length == 0 || priceFeed == address(0)
-                    || priceFeed.code.length == 0 || priceFeed == kusdAddress
-            ) {
-                revert KUSDEngine__InvalidAddress();
-            }
-
-            // Detect deplicate collateral addresses in constructor input. 
-            for (uint256 j = i + 1; j < collateralAddressesLength;) {
-                if (collateral == collateralAddresses[j]) {
-                    revert KUSDEngine__SameCollateralAddress(collateral);
-                }
-                unchecked { ++j; }
-            }
             s_priceFeeds[collateral] = priceFeed;
             s_collateralTokens.push(collateral);
 
-            unchecked {++i; }
+            unchecked {
+                ++i;
+            }
         }
 
-        i_kUSD = KingUSD(kusdAddress);
+        I_K_USD = KingUSD(kusdAddress);
     }
+
     // =============================== External Write Functions =================================
     /**
      * @notice Deposits collateral to the contract and mints KUSD to the caller.
      * @param collateralAddress The address of the token to deposit as collateral.
      * @param collateralAmount The amount of collateral to deposit.
-     * @param amountOfKUSDToMint The amount of KUSD to mint to the caller.
+     * @param amountOfKusdToMint The amount of KUSD to mint to the caller.
      */
-
-    function depositCollateralAndMintKUSD(
+    function depositCollateralAndMintKusd(
         address collateralAddress,
         uint256 collateralAmount,
-        uint256 amountOfKUSDToMint
+        uint256 amountOfKusdToMint
     ) external {
         // Call the depositCollateral and mintKUSD public function.
         depositCollateral(collateralAddress, collateralAmount);
-        mintKUSD(amountOfKUSDToMint);
+        mintKusd(amountOfKusdToMint);
     }
 
     /**
      * @notice Burns KUSD and redeems caller's collateral.
      * @param collateralAddress The address of the collateral to redeem.
      * @param collateralAmount The amount of collateral to redeem.
-     * @param amountOfKUSD The amount of KUSD to burn.
+     * @param amountOfKusd The amount of KUSD to burn.
      */
-    function redeemCollateralForKUSD(address collateralAddress, uint256 collateralAmount, uint256 amountOfKUSD)
+    function redeemCollateralForKusd(address collateralAddress, uint256 collateralAmount, uint256 amountOfKusd)
         external
     {
-        burnKUSD(amountOfKUSD);
+        burnKusd(amountOfKusd);
         redeemCollateral(collateralAddress, collateralAmount);
     }
 
@@ -214,22 +219,22 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         validateAmount(debtToCover)
     {
         // Read the user's current health factor.
-        uint256 userInitialHealthFactor = _calculateHealthFactor(user);
+        uint256 userInitialHealthFactor = _healthFactor(user);
         if (userInitialHealthFactor >= MIN_HEALTH_FACTOR) {
             revert KUSDEngine__HealthFactorAboveMinimum(user, userInitialHealthFactor);
         }
         // Read the user's collateral amount from USD.
-        uint256 userCollateralAmount = getCollateralAmountFromUSD(collateralAddress, debtToCover);
+        uint256 userCollateralAmount = getCollateralAmountFromUsd(collateralAddress, debtToCover);
         // Calculate the caller's bonus for liquidating a user and add it to the total collateral to be redeemed.
         uint256 bonusCollateral = (userCollateralAmount * LIQUIDATION_BONUS) / LIQUIDATION_PRECISION;
         uint256 totalCollateralToRedeem = userCollateralAmount + bonusCollateral;
 
         // Redeem collateral to the caller and burn kusd.
         _redeemCollateral(user, collateralAddress, totalCollateralToRedeem);
-        _burnKUSD(user, msg.sender, debtToCover);
+        _burnKusd(user, msg.sender, debtToCover);
 
         // Read user's current health factor and  revert if less than or equal to user's Previous HF.
-        uint256 userCurrentHealthFactor = _calculateHealthFactor(user);
+        uint256 userCurrentHealthFactor = _healthFactor(user);
         if (userCurrentHealthFactor <= userInitialHealthFactor) {
             revert KUSDEngine__UserHealthFactorNotImproved();
         }
@@ -264,15 +269,15 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * check caller's health factor and ensure its greater than or equal to 1.
      * @param amount The amount of KUSD to mint.
      */
-    function mintKUSD(uint256 amount) public nonReentrant validateAmount(amount) {
+    function mintKusd(uint256 amount) public nonReentrant validateAmount(amount) {
         // Add amount to the number of tokens minted by the caller.
-        s_kUSDMinted[msg.sender] += amount;
+        s_kusdMinted[msg.sender] += amount;
 
         // Call the internal function and check the caller's health factor.
         _revertIfUserHealthFactorIsBelowMinimum(msg.sender);
 
         // Mint KUSD to the caller.
-        bool success = i_kUSD.mint(msg.sender, amount);
+        bool success = I_K_USD.mint(msg.sender, amount);
         if (!success) {
             revert KUSDEngine__MintFailed();
         }
@@ -299,8 +304,8 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @notice Burns KUSD. i.e Removes certain amount of the KUSD from existence.
      * @param amount The amount of KUSD to be burned.
      */
-    function burnKUSD(uint256 amount) public nonReentrant validateAmount(amount) {
-        _burnKUSD(msg.sender, msg.sender, amount);
+    function burnKusd(uint256 amount) public nonReentrant validateAmount(amount) {
+        _burnKusd(msg.sender, msg.sender, amount);
     }
 
     // =============================== Private Write Functions =================================
@@ -333,22 +338,22 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param from The caller's address.
      * @param amount The amount of KUSD to be burned.
      */
-    function _burnKUSD(address onBehalfOf, address from, uint256 amount) private validateAmount(amount) {
+    function _burnKusd(address onBehalfOf, address from, uint256 amount) private validateAmount(amount) {
         // Read debtor's KUSD balance.
-        uint256 kUSDBalance = s_kUSDMinted[onBehalfOf];
+        uint256 kUsdBalance = s_kusdMinted[onBehalfOf];
 
         // Revert if amount is greater than the debtor's balance.
-        if (amount > kUSDBalance) {
-            revert KUSDEngine__AmountGreaterThanBalance(kUSDBalance);
+        if (amount > kUsdBalance) {
+            revert KUSDEngine__AmountGreaterThanBalance(kUsdBalance);
         }
 
         // Deduct amount from debtor's KUSD balance.
-        s_kUSDMinted[onBehalfOf] = kUSDBalance - amount;
+        s_kusdMinted[onBehalfOf] = kUsdBalance - amount;
 
         // Safely transfer KUSD from the caller to this contract.
-        IERC20(i_kUSD).safeTransferFrom(from, address(this), amount);
+        IERC20(I_K_USD).safeTransferFrom(from, address(this), amount);
 
-        i_kUSD.burn(amount);
+        I_K_USD.burn(amount);
     }
 
     // =============================== External Read Functions ==================================
@@ -358,7 +363,32 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @return healthFactor The user's health factor.
      */
     function getHealthFactor(address user) external view returns (uint256 healthFactor) {
-        return _calculateHealthFactor(user);
+        return _healthFactor(user);
+    }
+
+    /**
+     * @notice Returns health factor.
+     * @dev Health factor < 1e18 means liquidatable.
+     * Formula: HF = (collateralValueInUsd * 50 / 100) * 1e18 / totalKusdMinted
+     * @param totalKusdMinted The total kusd minted by an account.
+     * @param collateralValueInUsd The account's collateral value in usd.
+     * @return The health factor, scaled by 1e18.
+     */
+    function calculateHealthFactor(uint256 totalKusdMinted, uint256 collateralValueInUsd)
+        external
+        pure
+        returns (uint256)
+    {
+        return _calculateHealthFactor(totalKusdMinted, collateralValueInUsd);
+    }
+
+    /**
+     * @notice Returns the amount of token minted by the user.
+     * @param user The user's address.
+     * @return balance The amount of KUSD minted by the user.
+     */
+    function getKusdBalanceOf(address user) public view returns (uint256 balance) {
+        balance = s_kusdMinted[user];
     }
 
     /**
@@ -369,6 +399,57 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         return MIN_HEALTH_FACTOR;
     }
 
+    /**
+     * @notice Returns collateral token addresses.
+     * @return addresses of collateral tokens.
+     */
+    function getCollateralAddresses() external view returns (address[] memory) {
+        return s_collateralTokens;
+    }
+
+    /**
+     * @notice Returns liquidation threshold.
+     * @return The liquidation threshold.
+     */
+    function getLiquidationThreshold() external pure returns (uint256) {
+        return LIQUIDATION_THRESHOLD;
+    }
+
+    /**
+     * @notice Returns user's collateral balance.
+     * @param user The user's address.
+     * @param collateral The collateral's address.
+     * @return balance The user's collateral balance.
+     */
+    function getCollateralBalanceOf(address user, address collateral) external view returns (uint256 balance) {
+        return s_collateralDeposited[user][collateral];
+    }
+
+    /**
+     * @notice Returns the collateral's priceFeed address.
+     * @param collateral The collateral address.
+     * @return priceFeed The pricefeed's address.
+     */
+    function getCollateralPriceFeedAddress(address collateral) external view returns (address priceFeed) {
+        return s_priceFeeds[collateral];
+    }
+
+    /**
+     * @notice Returns liquidation bonus. claimable by liquidators.
+     * @return The liquidation bonus.
+     */
+    function getLiquidationBonus() external pure returns (uint256) {
+        return LIQUIDATION_BONUS;
+    }
+
+    /**
+     * @notice Returns Kusd contract address.
+     * @return Kusd contract address.
+     */
+    function getKusd() external view returns (address) {
+        return address(I_K_USD);
+    }
+
     // =============================== Public Read Functions ====================================
     /**
      * @notice Returns the collateral token amount equivalent to a USD amount.
@@ -376,14 +457,14 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param usdAmountInWei The USD amount scaled to 1e18 (e.g. 1 USD = 1e18).
      * @return collateralAmount The collateral amount in the token's base units.
      */
-    function getCollateralAmountFromUSD(address collateralAddress, uint256 usdAmountInWei)
+    function getCollateralAmountFromUsd(address collateralAddress, uint256 usdAmountInWei)
         public
         view
         onlyAllowedCollateral(collateralAddress)
         returns (uint256 collateralAmount)
     {
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
+        (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
 
         // Call the internal _revertIfPriceIsLessThanOrEqualZero function.
         _revertIfPriceIsLessThanOrEqualZero(collateralAddress, price);
@@ -404,19 +485,19 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /**
      * @notice Returns the user's collateral value.
      * @param user The user's address.
-     * @return totalCollateralValueInUSD The user's total collateral value in USD.
+     * @return totalCollateralValueInUsd The user's total collateral value in USD.
      */
-    function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUSD) {
+    function getAccountCollateralValue(address user) public view returns (uint256 totalCollateralValueInUsd) {
         uint256 collateralTokensLength = s_collateralTokens.length;
         for (uint256 i = 0; i < collateralTokensLength;) {
             address collateralAddress = s_collateralTokens[i];
             uint256 amount = s_collateralDeposited[user][collateralAddress];
-            totalCollateralValueInUSD += getCollateralUSDValue(collateralAddress, amount);
+            totalCollateralValueInUsd += getCollateralUsdValue(collateralAddress, amount);
             unchecked {
                 ++i;
             }
         }
-        return totalCollateralValueInUSD;
+        return totalCollateralValueInUsd;
     }
 
     /**
@@ -427,7 +508,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      * @param amount The amount of token
      * @return The USD value of the amount of token
      */
-    function getCollateralUSDValue(address collateralAddress, uint256 amount)
+    function getCollateralUsdValue(address collateralAddress, uint256 amount)
         public
         view
         onlyAllowedCollateral(collateralAddress)
@@ -435,7 +516,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     {
         // Read the collateral's token price using its address from chainlink.
         AggregatorV3Interface priceFeed = AggregatorV3Interface(s_priceFeeds[collateralAddress]);
-        (, int256 price,,,) = priceFeed.latestRoundData();
+        (, int256 price,,,) = priceFeed.staleCheckLatestRoundData();
 
         // Call the internal _revertIfPriceIsLessThanOrEqualZero function.
         _revertIfPriceIsLessThanOrEqualZero(collateralAddress, price);
@@ -456,64 +537,45 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
     /**
      * @notice Returns the user's account information.
      * @param user The user's address.
-     * @return totalKUSDMinted The total KUSD minted by the user.
-     * collateralValueInUSD The user's collateral's value in dollar.
+     * @return totalKusdMinted The total KUSD minted by the user.
+     * collateralValueInUsd The user's collateral's value in dollar.
+     *
      */
     function getAccountInformation(address user)
         public
         view
-        returns (uint256 totalKUSDMinted, uint256 collateralValueInUSD)
+        returns (uint256 totalKusdMinted, uint256 collateralValueInUsd)
     {
-        (totalKUSDMinted, collateralValueInUSD) = _getAccountInformation(user);
-    }
-
-    /**
-     * @notice Returns the amount of token minted by the user.
-     * @param user The user's address.
-     * @return balance The amount of KUSD minted by the user.
-     */
-    function getKUSDBalanceOf(address user) public view returns (uint256 balance) {
-        balance = s_kUSDMinted[user];
+        (totalKusdMinted, collateralValueInUsd) = _getAccountInformation(user);
     }
 
     // =============================== Private Read Functions ===================================
     /**
      * @notice Returns the user's account information.
      * @param user The user's address.
-     * @return totalKUSDMinted The total KUSD minted by the user.
-     * collateralValueInUSD The user's collateral's value in dollar.
+     * @return totalKusdMinted The total KUSD minted by the user.
+     * collateralValueInUsd The user's collateral's value in dollar.
+     *
      */
     function _getAccountInformation(address user)
         private
         view
-        returns (uint256 totalKUSDMinted, uint256 collateralValueInUSD)
+        returns (uint256 totalKusdMinted, uint256 collateralValueInUsd)
     {
-        totalKUSDMinted = s_kUSDMinted[user];
-        collateralValueInUSD = getAccountCollateralValue(user);
+        totalKusdMinted = s_kusdMinted[user];
+        collateralValueInUsd = getAccountCollateralValue(user);
 
-        return (totalKUSDMinted, collateralValueInUSD);
+        return (totalKusdMinted, collateralValueInUsd);
     }
 
     /**
      * @notice Returns the user's health factor.
-     * @dev Health factor < 1e18 means liquidatable.
-     * Formula: HF = (collateralValueInUSD * 50 / 100) * 1e18 / totalKUSDMinted
-     * @param user The user's address.
      * @return healthFactor The user's health factor, scaled by 1e18.
      */
-    function _calculateHealthFactor(address user) private view returns (uint256 healthFactor) {
-        (uint256 totalKUSDMinted, uint256 collateralValueInUSD) = _getAccountInformation(user);
+    function _healthFactor(address user) private view returns (uint256 healthFactor) {
+        (uint256 totalKusdMinted, uint256 collateralValueInUsd) = _getAccountInformation(user);
 
-        // Return if user has zero KUSD minted.
-        if (totalKUSDMinted == 0) {
-            return type(uint256).max; // no debt => safest state
-        }
-
-        // Calculate the user's health factor.
-        uint256 liquidationAdjustedCollateralUsd =
-            (collateralValueInUSD * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
-
-        return (liquidationAdjustedCollateralUsd * PRECISION) / totalKUSDMinted;
+        return _calculateHealthFactor(totalKusdMinted, collateralValueInUsd);
     }
 
     // ======================================== Internal View Functions =========================
@@ -523,7 +585,7 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
      */
     function _revertIfUserHealthFactorIsBelowMinimum(address user) internal view {
         // Read user's health factor.
-        uint256 userHealthFactor = _calculateHealthFactor(user);
+        uint256 userHealthFactor = _healthFactor(user);
 
         // Revert if the user's health factor is less than 1e18.
         if (userHealthFactor < MIN_HEALTH_FACTOR) {
@@ -571,5 +633,29 @@ contract KUSDEngine is IKUSDEngine, KingClaimMistakenETH {
         }
 
         return (normalizedPrice, collateralDecimals);
+    }
+
+    /**
+     * @notice Internal calculates health factor helper function.
+     * @dev Health factor < 1e18 means liquidatable.
+     * Formula: HF = (collateralValueInUsd * 50 / 100) * 1e18 / totalKusdMinted
+     * @param totalKusdMinted The total kusd minted by an account.
+     * @param collateralValueInUsd The account's collateral value in usd.
+     * @return healthFactor The user's health factor, scaled by 1e18.
+     */
+    function _calculateHealthFactor(uint256 totalKusdMinted, uint256 collateralValueInUsd)
+        internal
+        pure
+        returns (uint256)
+    {
+        // Return if user has zero KUSD minted.
+        if (totalKusdMinted == 0) {
+            return type(uint256).max; // no debt => safest state
+        }
+        // Calculate health factor.
+        uint256 liquidationAdjustedCollateralUsd =
+            (collateralValueInUsd * LIQUIDATION_THRESHOLD) / LIQUIDATION_PRECISION;
+
+        return (liquidationAdjustedCollateralUsd * PRECISION) / totalKusdMinted;
     }
 }
